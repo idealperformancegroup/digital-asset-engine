@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 from pathlib import Path
 
 import requests
@@ -7,6 +8,7 @@ import requests
 from providers.higgsfield import HiggsfieldProvider
 from providers.base import CreativeJob
 from providers.router import route_job
+from job_api import run_job_server
 
 TOOLKIT = Path(os.getenv("ARC_TOOLKIT_DIR", "/opt/arcads"))
 
@@ -196,6 +198,8 @@ if __name__ == "__main__":
     verify_higgsfield_estimate()
     verify_meta_read_only()
     read_meta_operation()
-    print("Worker ready. Waiting for jobs.", flush=True)
+    api_thread = threading.Thread(target=run_job_server, daemon=True)
+    api_thread.start()
+    print("Worker ready. Job API started.", flush=True)
     while True:
         time.sleep(300)
