@@ -29,6 +29,24 @@ class HiggsfieldProvider:
         )
         return response.status_code == 404, response.status_code
 
+    def estimate(self, job: CreativeJob, endpoint_id: str, parameters: dict):
+        response = requests.post(
+            f"{self.base_url}/{endpoint_id}/estimate",
+            headers={**self.headers(), "Content-Type": "application/json"},
+            json=parameters,
+            timeout=30,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"Higgsfield estimate failed status={response.status_code}: "
+                f"{response.text[:300]}"
+            )
+        data = response.json()
+        job.estimated_cost_usd = float(data["usd"])
+        job.metadata["estimate_credits"] = data.get("credits")
+        job.metadata["estimate_endpoint"] = endpoint_id
+        return data
+
     def submit(self, job: CreativeJob):
         # Deliberately blocked until a model-specific request builder and
         # provider cost estimator are implemented and a job is approved.
