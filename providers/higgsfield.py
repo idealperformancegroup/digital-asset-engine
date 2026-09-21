@@ -31,7 +31,7 @@ class HiggsfieldProvider:
 
     def estimate(self, job: CreativeJob, endpoint_id: str, parameters: dict):
         response = requests.post(
-            f"{self.base_url}/{endpoint_id}/estimate",
+            f"{self.base_url}/estimate/{endpoint_id}",
             headers={**self.headers(), "Content-Type": "application/json"},
             json=parameters,
             timeout=30,
