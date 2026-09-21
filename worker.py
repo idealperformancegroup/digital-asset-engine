@@ -5,6 +5,8 @@ from pathlib import Path
 import requests
 
 from providers.higgsfield import HiggsfieldProvider
+from providers.base import CreativeJob
+from providers.router import route_job
 
 TOOLKIT = Path(os.getenv("ARC_TOOLKIT_DIR", "/opt/arcads"))
 
@@ -36,6 +38,27 @@ def verify_higgsfield_read_only():
     except Exception as exc:
         print("HIGGSFIELD VERIFY: FAILED", flush=True)
         print(f"HIGGSFIELD ERROR: {exc}", flush=True)
+
+def verify_creative_routing():
+    """Verify the registry/router without submitting or estimating a paid job."""
+    try:
+        job = CreativeJob(
+            objective="architecture smoke test",
+            asset_type="image",
+            prompt="No generation. Routing test only.",
+            cost_ceiling_usd=0.0,
+        )
+        model = route_job(job)
+        print(
+            f"CREATIVE ROUTER: SUCCESS provider={model.provider} model={model.model_id} "
+            f"endpoint={model.endpoint_id}",
+            flush=True,
+        )
+        print("COST GATE: ACTIVE - paid generation requires estimate + explicit approval", flush=True)
+    except Exception as exc:
+        print("CREATIVE ROUTER: FAILED", flush=True)
+        print(f"CREATIVE ROUTER ERROR: {exc}", flush=True)
+
 
 def meta_get(path, token, params=None):
     api_version = os.getenv("META_API_VERSION", "v23.0")
@@ -129,6 +152,7 @@ def read_meta_operation():
 if __name__ == "__main__":
     check_environment()
     verify_higgsfield_read_only()
+    verify_creative_routing()
     verify_meta_read_only()
     read_meta_operation()
     print("Worker ready. Waiting for jobs.", flush=True)
