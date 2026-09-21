@@ -60,6 +60,46 @@ def verify_creative_routing():
         print(f"CREATIVE ROUTER ERROR: {exc}", flush=True)
 
 
+def verify_higgsfield_estimate():
+    """Run a non-generation cost preflight for the cheapest registered image route."""
+    provider = HiggsfieldProvider()
+    if not provider.configured:
+        print("HIGGSFIELD ESTIMATE: skipped - credentials missing", flush=True)
+        return
+    try:
+        job = CreativeJob(
+            objective="cost preflight smoke test",
+            asset_type="image",
+            prompt="A clean professional abstract gradient background for an advertising test.",
+            cost_ceiling_usd=0.01,
+        )
+        model = route_job(job)
+        params = {
+            "prompt": job.prompt,
+            "batch_size": 1,
+            "resolution": "720p",
+            "aspect_ratio": "1:1",
+            "enhance_prompt": False,
+        }
+        data = provider.estimate(job, model.endpoint_id, params)
+        within_ceiling = (
+            job.estimated_cost_usd is not None
+            and job.estimated_cost_usd <= job.cost_ceiling_usd
+        )
+        print(
+            f"HIGGSFIELD ESTIMATE: SUCCESS provider={model.provider} "
+            f"model={model.model_id} usd={job.estimated_cost_usd:.4f} "
+            f"ceiling={job.cost_ceiling_usd:.4f} within_ceiling={within_ceiling}",
+            flush=True,
+        )
+        print("HIGGSFIELD ESTIMATE MODE: preflight only - NO GENERATION SUBMITTED", flush=True)
+        if data.get("credits") is not None:
+            print(f"HIGGSFIELD ESTIMATE CREDITS: {data.get('credits')}", flush=True)
+    except Exception as exc:
+        print("HIGGSFIELD ESTIMATE: FAILED", flush=True)
+        print(f"HIGGSFIELD ESTIMATE ERROR: {exc}", flush=True)
+
+
 def meta_get(path, token, params=None):
     api_version = os.getenv("META_API_VERSION", "v23.0")
     url = f"https://graph.facebook.com/{api_version}/{path}"
@@ -153,6 +193,7 @@ if __name__ == "__main__":
     check_environment()
     verify_higgsfield_read_only()
     verify_creative_routing()
+    verify_higgsfield_estimate()
     verify_meta_read_only()
     read_meta_operation()
     print("Worker ready. Waiting for jobs.", flush=True)
