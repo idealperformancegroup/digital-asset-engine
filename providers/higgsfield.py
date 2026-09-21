@@ -47,11 +47,42 @@ class HiggsfieldProvider:
         job.metadata["estimate_endpoint"] = endpoint_id
         return data
 
-    def submit(self, job: CreativeJob):
-        # Deliberately blocked until a model-specific request builder and
-        # provider cost estimator are implemented and a job is approved.
+    def submit(self, job: CreativeJob, endpoint_id: str, parameters: dict):
+        """Submit one explicitly approved paid generation and wait for its result."""
         enforce_cost_gate(job)
-        raise NotImplementedError(
-            "Higgsfield paid generation is intentionally disabled until "
-            "model-specific request construction and cost estimation are installed."
+        if not self.api_key:
+            raise RuntimeError("HIGGSFIELD_API_KEY is not configured.")
+
+        # The official Python SDK reads HF_KEY. Keep Railway's existing secret
+        # name as the source of truth and map it only inside the worker process.
+        os.environ["HF_KEY"] = self.api_key
+        import higgsfield_client
+
+        request_ids = []
+
+        def on_enqueue(request_id):
+            request_ids.append(str(request_id))
+            job.request_id = str(request_id)
+            job.status = "SUBMITTED"
+
+        job.status = "SUBMITTING"
+        result = higgsfield_client.subscribe(
+            endpoint_id,
+            arguments=parameters,
+            on_enqueue=on_enqueue,
         )
+
+        if request_ids and not job.request_id:
+            job.request_id = request_ids[-1]
+        job.status = "COMPLETED"
+        job.metadata["provider_result"] = result
+
+        images = result.get("images") or []
+        if images:
+            first = images[0]
+            if isinstance(first, dict):
+                job.output_location = first.get("url")
+            elif isinstance(first, str):
+                job.output_location = first
+
+        return result
