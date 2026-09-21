@@ -13,6 +13,40 @@ def check_environment():
     print(f"Meta token configured: {bool(os.getenv('META_ACCESS_TOKEN'))}", flush=True)
     print(f"Arcads API configured: {bool(os.getenv('ARCADS_API_KEY'))}", flush=True)
 
+
+def verify_higgsfield_read_only():
+    """Verify Higgsfield credentials without submitting a billable generation."""
+    key = os.getenv("HIGGSFIELD_API_KEY")
+    print(f"Higgsfield API configured: {bool(key)}", flush=True)
+    if not key:
+        print("HIGGSFIELD VERIFY: skipped - credentials missing", flush=True)
+        return
+
+    # Higgsfield's authenticated request-status endpoint returns:
+    # 401 for invalid credentials, and 404 when the request ID does not exist
+    # (or belongs to another account). Using a random UUID therefore proves
+    # authentication without creating a generation or consuming credits.
+    probe_id = "00000000-0000-0000-0000-000000000000"
+    url = f"https://api.higgsfield.ai/requests/{probe_id}/status"
+    try:
+        response = requests.get(
+            url,
+            headers={"Authorization": f"Key {key}"},
+            timeout=30,
+        )
+        if response.status_code == 404:
+            print("HIGGSFIELD VERIFY: SUCCESS", flush=True)
+            print("HIGGSFIELD VERIFY MODE: authenticated non-generation probe", flush=True)
+        elif response.status_code == 401:
+            print("HIGGSFIELD VERIFY: FAILED", flush=True)
+            print("HIGGSFIELD ERROR: invalid or unauthorized API credentials", flush=True)
+        else:
+            print(f"HIGGSFIELD VERIFY: INCONCLUSIVE status={response.status_code}", flush=True)
+            print(f"HIGGSFIELD RESPONSE: {response.text[:300]}", flush=True)
+    except Exception as exc:
+        print("HIGGSFIELD VERIFY: FAILED", flush=True)
+        print(f"HIGGSFIELD ERROR: {exc}", flush=True)
+
 def meta_get(path, token, params=None):
     api_version = os.getenv("META_API_VERSION", "v23.0")
     url = f"https://graph.facebook.com/{api_version}/{path}"
@@ -104,6 +138,7 @@ def read_meta_operation():
 
 if __name__ == "__main__":
     check_environment()
+    verify_higgsfield_read_only()
     verify_meta_read_only()
     read_meta_operation()
     print("Worker ready. Waiting for jobs.", flush=True)
