@@ -1,6 +1,7 @@
 import json
 import os
 
+from durable_state import DurableState
 from providers.base import CreativeJob
 from providers.higgsfield import HiggsfieldProvider
 from providers.router import route_job
@@ -32,75 +33,122 @@ def main():
         print("RUNNER: BLOCKED - RUN_PROMPT required", flush=True)
         return 3
     if ceiling <= 0 or ceiling > max_ceiling:
+        print(f"RUNNER: BLOCKED - ceiling {ceiling:.4f} outside allowed range (absolute max {max_ceiling:.4f})", flush=True)
+        return 4
+
+    state = DurableState()
+    if not state.configured:
+        print("RUNNER: BLOCKED - durable state not configured", flush=True)
+        return 8
+
+    claimed, existing = state.claim(
+        job_id, objective, prompt, ceiling,
+        "APPROVED" if approval else "NOT_APPROVED",
+    )
+    if not claimed:
         print(
-            f"RUNNER: BLOCKED - ceiling {ceiling:.4f} outside allowed range "
-            f"(absolute max {max_ceiling:.4f})",
+            "RUNNER: DUPLICATE BLOCKED - durable job_id already exists "
+            f"job_id={job_id} status={(existing or {}).get('status')}",
             flush=True,
         )
-        return 4
+        return 9
 
     provider = HiggsfieldProvider()
     if not provider.configured:
+        state.update(job_id, status="BLOCKED", error="HIGGSFIELD_API_KEY not configured")
         print("RUNNER: BLOCKED - HIGGSFIELD_API_KEY not configured", flush=True)
         return 5
 
-    job = CreativeJob(
-        objective=objective,
-        asset_type="image",
-        prompt=prompt,
-        cost_ceiling_usd=ceiling,
-        approval_state="APPROVED" if approval else "NOT_APPROVED",
-    )
-    model = route_job(job)
-    params = {
-        "prompt": job.prompt,
-        "batch_size": 1,
-        "resolution": resolution,
-        "aspect_ratio": aspect_ratio,
-        "enhance_prompt": enhance_prompt,
-    }
+    try:
+        job = CreativeJob(
+            objective=objective,
+            asset_type="image",
+            prompt=prompt,
+            cost_ceiling_usd=ceiling,
+            approval_state="APPROVED" if approval else "NOT_APPROVED",
+        )
+        model = route_job(job)
+        params = {
+            "prompt": job.prompt,
+            "batch_size": 1,
+            "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
+            "enhance_prompt": enhance_prompt,
+        }
 
-    estimate = provider.estimate(job, model.endpoint_id, params)
-    print(
-        f"RUNNER ESTIMATE: job_id={job_id} provider={model.provider} "
-        f"model={model.model_id} usd={job.estimated_cost_usd:.4f} "
-        f"ceiling={job.cost_ceiling_usd:.4f} dry_run={dry_run} "
-        f"approved={approval}",
-        flush=True,
-    )
-
-    if job.estimated_cost_usd is None or job.estimated_cost_usd > ceiling:
-        print("RUNNER: BLOCKED BY COST CEILING", flush=True)
-        return 6
-
-    if dry_run:
+        estimate = provider.estimate(job, model.endpoint_id, params)
+        state.update(
+            job_id,
+            provider=model.provider,
+            model=model.model_id,
+            estimated_cost_usd=job.estimated_cost_usd,
+            status="ESTIMATED",
+        )
         print(
-            "RUNNER DRY RUN: estimate passed; no generation submitted",
+            f"RUNNER ESTIMATE: job_id={job_id} provider={model.provider} "
+            f"model={model.model_id} usd={job.estimated_cost_usd:.4f} "
+            f"ceiling={job.cost_ceiling_usd:.4f} dry_run={dry_run} approved={approval}",
             flush=True,
         )
+
+        if job.estimated_cost_usd is None or job.estimated_cost_usd > ceiling:
+            state.update(job_id, status="BLOCKED_COST")
+            print("RUNNER: BLOCKED BY COST CEILING", flush=True)
+            return 6
+
+        if dry_run:
+            state.update(job_id, status="DRY_RUN_COMPLETE")
+            print("RUNNER DRY RUN: estimate passed; no generation submitted", flush=True)
+            return 0
+
+        if not approval:
+            state.update(job_id, status="BLOCKED_APPROVAL")
+            print("RUNNER: BLOCKED - paid generation not explicitly approved", flush=True)
+            return 7
+
+        state.update(job_id, status="SUBMITTING")
+        result = provider.submit(job, model.endpoint_id, params)
+        state.update(
+            job_id,
+            request_id=job.request_id,
+            provider_output_url=job.output_location,
+            actual_cost_usd=job.actual_cost_usd,
+            status=job.status,
+        )
+
+        bucket = path = None
+        if job.output_location:
+            bucket, path = state.archive_output(job_id, job.output_location)
+            state.update(
+                job_id,
+                asset_bucket=bucket,
+                asset_path=path,
+                status="ARCHIVED",
+                completed_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            )
+
+        safe = {
+            "job_id": job_id,
+            "objective": objective,
+            "provider": model.provider,
+            "model": model.model_id,
+            "estimated_cost_usd": job.estimated_cost_usd,
+            "cost_ceiling_usd": job.cost_ceiling_usd,
+            "actual_cost_usd": job.actual_cost_usd,
+            "request_id": job.request_id,
+            "status": "ARCHIVED" if path else job.status,
+            "provider_output_location": job.output_location,
+            "asset_bucket": bucket,
+            "asset_path": path,
+            "estimate_credits": estimate.get("credits"),
+            "result_keys": sorted(result.keys()) if isinstance(result, dict) else [],
+        }
+        print("RUNNER RESULT: " + json.dumps(safe, sort_keys=True), flush=True)
         return 0
-
-    if not approval:
-        print("RUNNER: BLOCKED - paid generation not explicitly approved", flush=True)
-        return 7
-
-    result = provider.submit(job, model.endpoint_id, params)
-    safe = {
-        "job_id": job_id,
-        "objective": objective,
-        "provider": model.provider,
-        "model": model.model_id,
-        "estimated_cost_usd": job.estimated_cost_usd,
-        "cost_ceiling_usd": job.cost_ceiling_usd,
-        "actual_cost_usd": job.actual_cost_usd,
-        "request_id": job.request_id,
-        "status": job.status,
-        "output_location": job.output_location,
-        "estimate_credits": estimate.get("credits"),
-        "result_keys": sorted(result.keys()) if isinstance(result, dict) else [],
-    }
-    print("RUNNER RESULT: " + json.dumps(safe, sort_keys=True), flush=True)
-    return 0
+    except Exception as exc:
+        state.update(job_id, status="FAILED", error=str(exc)[:1000])
+        print(f"RUNNER: FAILED - {type(exc).__name__}: {str(exc)[:300]}", flush=True)
+        return 10
 
 
 if __name__ == "__main__":
