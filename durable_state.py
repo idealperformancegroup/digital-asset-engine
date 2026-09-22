@@ -50,3 +50,10 @@ class DurableState:
             timeout=180,
         )
         return data.get("bucket"), data.get("path")
+
+    def preview(self, job_id, expires_in=900):
+        return self._call({
+            "action": "preview",
+            "job_id": job_id,
+            "expires_in": expires_in,
+        })
